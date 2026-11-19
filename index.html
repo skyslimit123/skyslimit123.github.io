@@ -239,7 +239,7 @@ th{color:var(--muted);font-weight:500;font-size:12.5px}
 <body>
 <div class="wrap">
   <h1>个人健身记录本</h1>
-  <p class="sub">按你的节奏内置：周一~周四练 · 力量一周最多 2 次 · 每次 4~6 个动作 · 专注力量与增肌（有氧交给每周 2 次慢跑） · 胸部默认不安排 · 动作只从你现有的器械里选</p>
+  <p class="sub">按你的节奏内置：周一~周四练 · 力量一周最多 2 次 · 每次 4~6 个动作 · 专注力量与增肌（有氧交给每周 2 次慢跑） · 休赛期加入胸肌/卧推（至 2027-04 中） · 动作只从你现有的器械里选</p>
 
   <div id="storageWarn" class="hide"></div>
 
@@ -553,14 +553,14 @@ const GUIDE = {
     steps:['向上推起至手臂接近伸直','下放到胸侧'],
     key:['肩胛稳定','肘约 45°','不完全锁死'],
     err:['肩前送','肘完全外展','弹震'],
-    use:'胸部默认不安排，加入时先小重量找感觉。'
+    use:'休赛期主项：先小重量找肩胛感觉，再按 2kg 一档渐进加重。'
   },
   '上斜哑铃卧推': {
     start:'凳角 30~45°，哑铃在上胸两侧。',
     steps:['向上略向内推','下放回上胸'],
     key:['角度不过高','肩胛后收','控制'],
     err:['角度太陡变成肩推','耸肩'],
-    use:'偶尔加入，先保证肩胛稳定再谈重量。'
+    use:'上胸补充：凳角 30°，先保证肩胛稳定再谈重量；肩前侧紧时可优先暂停这一项。'
   },
   '杠铃卧推': {
     start:'仰卧，握距略比肩宽，肩胛后收，双脚踩实。',
@@ -604,7 +604,7 @@ const KEY_BAK = KEY + '__bak';     // 上一份存档（每次保存前自动轮
 const KEY_RAW = KEY + '__raw';     // 读不出来的原始数据，永远保留
 const DRAFT_KEY = KEY + '_draft';  // 未保存的表单草稿，防止刷新丢失输入
 const BADGE_KEY = KEY + '_badges'; // 已解锁成就，仅用于"只庆祝一次"
-const DEFAULT_SETTINGS = {chestEnabled:false, planSize:5, state:'normal', seed:0, variant:0, stateDate:'', weeklyGoal:2};
+const DEFAULT_SETTINGS = {chestEnabled:true, chestMigrated:false, planSize:5, state:'normal', seed:0, variant:0, stateDate:'', weeklyGoal:2};
 function normalizeSettings(o){
   const src = o && typeof o==='object' ? o : {};
   const planSize = [4,5,6].indexOf(Number(src.planSize))>=0 ? Number(src.planSize) : DEFAULT_SETTINGS.planSize;
@@ -612,8 +612,13 @@ function normalizeSettings(o){
   const seed = Number(src.seed);
   const variant = Number(src.variant);
   const weeklyGoal = Math.max(1, Math.min(3, Math.round(Number(src.weeklyGoal) || DEFAULT_SETTINGS.weeklyGoal)));
+  /* 休赛期（2026-11 ~ 2027-04 中）加入胸肌/卧推：老存档首次读取时自动打开，
+     之后 chestMigrated=true，完全尊重用户手动开关，不再反复强制打开 */
+  const chestMigrated = src.chestMigrated===true;
+  const chestEnabled = chestMigrated ? (src.chestEnabled===true) : true;
   return {
-    chestEnabled:src.chestEnabled===true,
+    chestEnabled:chestEnabled,
+    chestMigrated:true,
     planSize:planSize,
     state:state,
     seed:Number.isSafeInteger(seed) && seed>=0 ? seed : DEFAULT_SETTINGS.seed,
@@ -901,6 +906,8 @@ function updateStorageBanner(){
 }
 function findEx(name){ return EX.find(e=>e.n===name); }
 function allEx(){ return EX.filter(e=> !e.chest || S.settings.chestEnabled); }
+/* 当前纳入统计/覆盖提醒的肌群：休赛期把「胸」算进去 */
+function activeMuscles(){ return S.settings.chestEnabled ? MUSCLES.concat(['胸']) : MUSCLES.slice(); }
 
 /* ============ 统计 ============ */
 function totalSets(r){ return (r.items||[]).reduce((a,it)=>a+(it.sets||[]).length, 0); }
@@ -1452,7 +1459,9 @@ function buildPlan(){
   const tight = S.settings.state==='tight';
   const total = tight ? 4 : (+S.settings.planSize || 5);
   // 4~6 个动作：优先保住主项的重量连续性，其余名额用于补短板和核心
-  const quota = ({4:[2,1,1], 5:[2,2,1], 6:[3,2,1]})[total] || [2,1,1];
+  // 休赛期加卧推后，5 个动作从 2 主项改为 3 主项（推 + 拉 + 腿），避免下肢被挤掉
+  const baseQuota = ({4:[2,1,1], 5:[2,2,1], 6:[3,2,1]})[total] || [2,1,1];
+  const quota = (S.settings.chestEnabled && total===5) ? [3,1,1] : baseQuota;
   const pool = allEx().filter(e=>{
     if(fatigue && e.m==='腿' && e.k==='main') return false;
     return true;
@@ -1463,13 +1472,47 @@ function buildPlan(){
   // 主项优先延续上次练过的动作，保证重量/次数能连续跟踪（渐进超负荷的前提）
   const mainScore = e => {
     const a = advise(e);
-    return weak(e.m)/3 + missBonus(e.m) + (a.kind==='up'?3.2:(a.kind==='hold'?2.2:0)) + (lastNames.has(e.n)?0.5:0) + noise(e);
+    return weak(e.m)/3 + missBonus(e.m) + (a.kind==='up'?3.2:(a.kind==='hold'?2.2:0)) + (lastNames.has(e.n)?0.5:0)
+      + (S.settings.chestEnabled && e.id==='bbbench' ? 2.2 : 0)   // 休赛期把杠铃卧推定为胸部主项，稳定追踪重量
+      + (S.settings.chestEnabled && e.m==='背' && e.k==='main' ? 1.5 : 0) // 推拉平衡：给「拉」的主项加权护肩
+      + noise(e);
   };
   const assistScore = e => weak(e.m)/2 + missBonus(e.m) + (lastNames.has(e.n)?-1:0.4) + noise(e);
   const lightScore = e => (lastNames.has(e.n)?-0.8:0.6) + noise(e);
 
   const rot = S.settings.variant || 0;
   const mains = pickDiverse(pool.filter(e=>e.k==='main'), quota[0], mainScore, [], rot);
+  /* 休赛期把杠铃卧推「钉」成固定主项：换一批、补短板都不会把它换掉，
+     重量才能连续追踪。有历史时自动按上次表现给出加重建议 */
+  if(S.settings.chestEnabled){
+    const bench = pool.find(e=>e.id==='bbbench');
+    if(bench && mains.indexOf(bench)<0){
+      if(mains.length>=quota[0] && mains.length){
+        let worst = 0;
+        mains.forEach((e,i)=>{ if(mainScore(e)<mainScore(mains[worst])) worst=i; });
+        mains[worst] = bench;
+      }else mains.push(bench);
+    }
+  }
+  /* 推拉平衡：有卧推/胸推时保一个背主项；后卫投篮讲究肩关节灵活，
+     只推不拉、胸小肌过紧会影响出手稳定。替换时不碰卧推 */
+  if(S.settings.chestEnabled && mains.some(e=>e.m==='胸') && !mains.some(e=>e.m==='背')){
+    const pull = pool.filter(e=>e.k==='main' && e.m==='背').sort((a,b)=>mainScore(b)-mainScore(a))[0];
+    if(pull){
+      let idx = -1;
+      mains.forEach((e,i)=>{ if(e.id!=='bbbench' && (idx<0 || mainScore(e)<mainScore(mains[idx]))) idx=i; });
+      if(idx>=0) mains[idx] = pull;
+    }
+  }
+  /* 下肢不能被挤掉：5/6 个动作时保一个腿主项（篮球的启动、变向、弹跳） */
+  if(S.settings.chestEnabled && !fatigue && quota[0]>=3 && !mains.some(e=>e.m==='腿')){
+    const leg = pool.filter(e=>e.k==='main' && e.m==='腿').sort((a,b)=>mainScore(b)-mainScore(a))[0];
+    if(leg){
+      let idx = -1;
+      mains.forEach((e,i)=>{ if(e.id!=='bbbench' && e.m!=='背' && (idx<0 || mainScore(e)<mainScore(mains[idx]))) idx=i; });
+      if(idx>=0) mains[idx] = leg;
+    }
+  }
   const covered = new Set(mains.map(e=>e.m));
   const assists = pickDiverse(pool.filter(e=>e.k==='assist' && mains.indexOf(e)<0), quota[1],
     e=>assistScore(e) + (covered.has(e.m)?-1.5:1.5), [], rot+1);
@@ -1500,6 +1543,8 @@ function buildPlan(){
       const n = ms.stat[ex.m]||0;
       if(ms.recent.length && n < 8) why += ' 近 '+ms.recent.length+' 次训练「'+ex.m+'」'+(n===0?'尚未覆盖':'仅 '+n+' 组')+'，是当前短板，优先补齐。';
     }
+    if(S.settings.chestEnabled && ex.k==='main' && (ex.m==='胸'||ex.m==='肩'))
+      why += ' 推类主项，已配「拉」的动作平衡肩关节，避免胸小肌过紧影响投篮出手。';
     if(ex.k==='core') why += ' 核心抗伸展/抗旋转，对跑步时的躯干稳定和力量传导直接有用。';
     return {ex:ex, sets:ex.s, reps:ex.r[0]+'~'+ex.r[1]+' '+unitOf(ex), w:a.w, label:a.label, tag:a.tag, kind:a.kind, why:why};
   });
@@ -1521,18 +1566,19 @@ function renderPlan(){
   h += '<div class="btnrow"><label style="margin:0">今日状态 <select id="stateSel" class="sel-inline">'+
        ['normal','legs','tight'].map(k=>'<option value="'+k+'"'+(st===k?' selected':'')+'>'+({normal:'正常',legs:'下肢疲劳(慢跑后)',tight:'时间紧'})[k]+'</option>').join('')+'</select></label>'+
        '<button class="btn sm" data-act="regen">换一批</button></div></div>';
-  h += '<div class="small muted" style="margin-top:8px">当前状态：'+esc(stateLabel)+' · 推荐逻辑：渐进超负荷 + 补短板'+(st==='legs'?'（已自动剔除下肢大重量主项）':'')+(st==='tight'?'（压缩为 4 个动作：主项 2 + 辅助 1 + 核心 1）':'')+'</div>';
+  h += '<div class="small muted" style="margin-top:8px">当前状态：'+esc(stateLabel)+' · 推荐逻辑：渐进超负荷 + 补短板'+(st==='legs'?'（已自动剔除下肢大重量主项）':'')+(st==='tight'?'（压缩为 4 个动作：主项 2 + 辅助 1 + 核心 1）':'')+(S.settings.chestEnabled?' · 休赛期已加入胸肌/卧推（至 2027-04 中），推类主项会配一个拉的动作护肩':'')+'</div>';
   if(S.records.length){
     const lastRec = sortedRecs()[0];
     const lastM = new Set((lastRec.items||[]).map(i=>i.muscle));
-    const coveredTxt = MUSCLES.filter(m=>lastM.has(m)).join(' / ') || '—';
-    const missed = MUSCLES.filter(m=>!lastM.has(m));
+    const coveredTxt = activeMuscles().filter(m=>lastM.has(m)).join(' / ') || '—';
+    const missed = activeMuscles().filter(m=>!lastM.has(m));
     h += '<div class="small muted" style="margin-top:4px">上次（'+esc(lastRec.date)+'）覆盖：'+esc(coveredTxt)+
       (missed.length
         ? ' · 未练到：<b style="color:var(--brand)">'+esc(missed.join(' / '))+'</b>，这次优先安排'
         : ' · 全身都覆盖到了，这次按渐进超负荷推进')+'</div>';
   }
   if(empty) h += '<div class="banner warn" style="margin-top:12px">这是起步模板：还没有历史记录，重量只是参考起点。按体感调整并保存第一次训练后，下次推荐就会按你自己的数据进化。</div>';
+  if(S.settings.chestEnabled && todayStr()>'2027-04-15') h += '<div class="banner warn" style="margin-top:12px">原定休赛期已结束，考虑到设置里把胸部调回「不安排」，为赛季保留肩肘状态与出手手感。</div>';
   h += '<hr>';
   currentPlan.forEach((p,i)=>{
     const tagCls = p.kind==='up' ? 'o' : (p.kind==='hold' ? 'b' : 'm');
@@ -1621,7 +1667,7 @@ function renderLogBody(){
   if(!draft) draft = newDraft();
   const opts = (selected)=>{
     let s = '';
-    MUSCLES.concat(S.settings.chestEnabled ? ['胸'] : []).forEach(m=>{
+    activeMuscles().forEach(m=>{
       const list = allEx().filter(e=>e.m===m);
       if(!list.length) return;
       s += '<optgroup label="'+m+'">'+list.map(e=>'<option value="'+e.id+'"'+(e.id===selected?' selected':'')+'>'+esc(e.n)+'</option>').join('')+'</optgroup>';
@@ -1808,15 +1854,15 @@ function renderSettings(){
     '<div>经验水平</div><div>进阶（2 年以上），采用渐进超负荷</div>'+
     '<div>训练节奏</div><div>周一~周四练，周五~周日不练；力量一周最多 2 次，另有每周 2 次慢跑</div>'+
     '<div>单次容量</div><div>每次 4~6 个动作，全身覆盖，不按固定分化日程；靠多次训练轮换补齐全身</div>'+
-    '<div>特别安排</div><div>胸部少练或基本不练 → 默认从推荐中排除</div>'+
+    '<div>特别安排</div><div>休赛期（2026-11 ~ 2027-04 中）：加入杠铃卧推与胸部主项，每次配一个拉的动作护肩；进入赛季后可在下方调回「不安排」</div>'+
     '<div>推荐逻辑</div><div>上次全部组达标 → 加重量；同时补齐近 2 次练得少的肌群</div>'+
   '</div><div class="small muted" style="margin:-4px 0 12px">界面深浅色跟随系统外观自动切换，不需要手动调（Windows：设置 → 个性化 → 颜色）。</div><hr>';
   h += '<div class="row2 even">'+
     '<div class="f"><label>每次推荐动作数</label><select id="planSize">'+
       [4,5,6].map(n=>'<option value="'+n+'"'+(S.settings.planSize===n?' selected':'')+'>'+n+' 个'+((n===5)?'（推荐）':'')+'</option>').join('')+'</select></div>'+
-    '<div class="f"><label>胸部动作</label><select id="chestToggle">'+
-      '<option value="off"'+(S.settings.chestEnabled?'':' selected')+'>不安排（默认）</option>'+
-      '<option value="on"'+(S.settings.chestEnabled?' selected':'')+'>偶尔加入推荐</option>'+
+    '<div class="f"><label>胸部 / 卧推</label><select id="chestToggle">'+
+      '<option value="off"'+(S.settings.chestEnabled?'':' selected')+'>不安排（赛季用）</option>'+
+      '<option value="on"'+(S.settings.chestEnabled?' selected':'')+'>休赛期加入（含杠铃卧推）</option>'+
     '</select></div></div>'+
     '<div class="row2 even" style="margin-top:10px">'+
       '<div class="f"><label for="weeklyGoal">每周力量训练目标</label><select id="weeklyGoal">'+
